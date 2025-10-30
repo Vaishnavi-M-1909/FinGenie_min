@@ -1,28 +1,35 @@
-
 import streamlit as st
-import pandas as pd
 from modules.utils import process_pdf_to_df, compute_basic_stats, mini_chatbot, youtube_search_links
 
 st.set_page_config(page_title="FinGenie (Lite)", page_icon="💰", layout="wide")
-with open("styles/style.css","r",encoding="utf-8") as css:
+with open("styles/style.css", "r", encoding="utf-8") as css:
     st.markdown(f"<style>{css.read()}</style>", unsafe_allow_html=True)
 
-# Sidebar
 st.sidebar.image("assets/fingenie_logo.png", width=160)
 st.sidebar.markdown("### FinGenie (Lite)")
 st.sidebar.caption("Minimal, offline prototype — no paid APIs.")
 
-tab1, tab2, tab3 = st.tabs(["🏠 Dashboard","💬 AI Chatbot","🎥 Financial Videos"])
+tab1, tab2, tab3 = st.tabs(["🏠 Dashboard", "💬 AI Chatbot", "🎥 Financial Videos"])
 
 # -------------------- Dashboard --------------------
 with tab1:
     st.header("Upload & Quick Analyze")
+    force_ocr = st.checkbox("Force OCR (for scanned/image-only Kotak PDFs)", value=False)
     uploaded = st.file_uploader("📂 Upload a real bank statement (PDF)", type=["pdf"])
     if uploaded:
         with st.spinner("Reading your statement..."):
-            df = process_pdf_to_df(uploaded)
+            df, raw_text, meta = process_pdf_to_df(uploaded, return_text=True, force_ocr=force_ocr)
+
+        with st.expander("Extraction Debug"):
+            st.write(f"Engine: **{meta.get('engine','')}**, Pages: **{meta.get('pages',0)}**")
+            st.write(meta.get("note", ""))
+            if raw_text.strip():
+                st.code(raw_text[:1500] + ("..." if len(raw_text) > 1500 else ""), language="text")
+            else:
+                st.info("No selectable text found. If OCR is off, enable the checkbox above. If already on, verify Tesseract & Poppler are installed.")
+
         if df.empty:
-            st.error("Could not parse any transactions. Try another statement or clearer PDF.")
+            st.error("Could not parse any transactions. Try turning on OCR or using a clearer PDF.")
         else:
             st.success("Parsed transactions successfully!")
             stats = compute_basic_stats(df)
@@ -30,17 +37,8 @@ with tab1:
             c1.metric("Transactions", stats["n_txn"])
             c2.metric("Total Debits", f"₹{stats['sum_debits']:,.2f}")
             c3.metric("Total Credits", f"₹{stats['sum_credits']:,.2f}")
-
-            # Show preview table
             st.subheader("Preview")
-            st.dataframe(df.head(50), use_container_width=True)
-
-            # Save for later (optional)
-            try:
-                df.to_csv("data/processed/last_statement.csv", index=False)
-                st.caption("Saved to data/processed/last_statement.csv")
-            except Exception:
-                pass
+            st.dataframe(df.head(100), use_container_width=True)
     else:
         st.info("Upload a PDF statement to get started.")
 
