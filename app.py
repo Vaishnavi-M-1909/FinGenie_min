@@ -14,22 +14,35 @@ tab1, tab2, tab3 = st.tabs(["🏠 Dashboard", "💬 AI Chatbot", "🎥 Financial
 # -------------------- Dashboard --------------------
 with tab1:
     st.header("Upload & Quick Analyze")
-    force_ocr = st.checkbox("Force OCR (for scanned/image-only Kotak PDFs)", value=False)
+    force_ocr = st.checkbox("Force OCR (for scanned/image-only PDFs)", value=False)
     uploaded = st.file_uploader("📂 Upload a real bank statement (PDF)", type=["pdf"])
+
+    # Show password field only after a file is uploaded
+    password = None
+    if uploaded:
+        st.info("If your bank PDF is password protected, enter the password below (it will not be saved).")
+        password = st.text_input("PDF password (leave blank if none)", type="password")
+
     if uploaded:
         with st.spinner("Reading your statement..."):
-            df, raw_text, meta = process_pdf_to_df(uploaded, return_text=True, force_ocr=force_ocr)
+            # pass password through (None if blank)
+            pwd = password if password else None
+            df, raw_text, meta = process_pdf_to_df(uploaded, return_text=True, force_ocr=force_ocr, password=pwd)
+
+            # Overwrite local pwd variable immediately
+            pwd = None
+            password = None
 
         with st.expander("Extraction Debug"):
             st.write(f"Engine: **{meta.get('engine','')}**, Pages: **{meta.get('pages',0)}**")
             st.write(meta.get("note", ""))
-            if raw_text.strip():
+            if raw_text and raw_text.strip():
                 st.code(raw_text[:1500] + ("..." if len(raw_text) > 1500 else ""), language="text")
             else:
-                st.info("No selectable text found. If OCR is off, enable the checkbox above. If already on, verify Tesseract & Poppler are installed.")
+                st.info("No selectable text found. If OCR is off, enable it or verify Tesseract & Poppler are installed.")
 
         if df.empty:
-            st.error("Could not parse any transactions. Try turning on OCR or using a clearer PDF.")
+            st.error("Could not parse any transactions. Try turning on OCR (if scanned) or use a clearer PDF.")
         else:
             st.success("Parsed transactions successfully!")
             stats = compute_basic_stats(df)
@@ -37,6 +50,7 @@ with tab1:
             c1.metric("Transactions", stats["n_txn"])
             c2.metric("Total Debits", f"₹{stats['sum_debits']:,.2f}")
             c3.metric("Total Credits", f"₹{stats['sum_credits']:,.2f}")
+
             st.subheader("Preview")
             st.dataframe(df.head(100), use_container_width=True)
     else:
@@ -45,7 +59,7 @@ with tab1:
 # -------------------- AI Chatbot --------------------
 with tab2:
     st.header("Ask FinGenie")
-    st.caption("This is a tiny offline assistant (no external APIs).")
+    st.caption("Tiny offline assistant (no external APIs).")
     q = st.text_input("Ask about budgeting, credit cards, emergency funds, etc.")
     if st.button("Ask"):
         if not q.strip():
