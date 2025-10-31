@@ -158,9 +158,6 @@ def compute_basic_stats(df):
 # -------------------- OFFLINE CHATBOT --------------------
 def mini_chatbot(msg: str) -> str:
     msg = msg.lower().strip()
-  def mini_chatbot(msg: str) -> str:
-    msg = msg.lower().strip()
-    
     if "budget" in msg:
         return "Use the 50/30/20 rule: 50% needs, 30% wants, 20% savings."
     if "save" in msg:
@@ -172,15 +169,11 @@ def mini_chatbot(msg: str) -> str:
     return "Ask me about budgeting, saving, or investing — I’m your offline FinGenie!"
 
 
-    return "Ask me about budgeting, saving, investing, loans, or money habits — I’m your offline FinGenie!"
-
-
-
 # -------------------- FINANCE VIDEOS --------------------
 def youtube_search_links(topic: str, n=8):
     topic_q = "+".join(topic.split())
     base = "https://www.youtube.com/results?search_query="
     links = [
-        ("Search Results", base + topic_q),
+        ("Search Results", base + topic_q)
     ]
     return links[:n]
