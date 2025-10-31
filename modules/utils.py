@@ -10,9 +10,9 @@ except Exception:
     fitz = None
 
 
-# -------------------- PDF Extraction --------------------
+# -------------------- MAIN ENTRY --------------------
 def process_pdf_to_df(uploaded_file, return_text=False):
-    """Extract text and parse transactions into a DataFrame."""
+    """Extract text and parse Kotak dummy statement PDF."""
     text, meta = extract_text(uploaded_file)
 
     if not text.strip():
@@ -23,24 +23,23 @@ def process_pdf_to_df(uploaded_file, return_text=False):
     return (df, text, meta) if return_text else df
 
 
+# -------------------- PDF TEXT EXTRACTION --------------------
 def extract_text(uploaded_file):
-    """Try pdfplumber → PyMuPDF to extract text from PDF."""
+    """Extract selectable text using pdfplumber, fallback to PyMuPDF."""
     diag = {"engine": "", "pages": 0, "note": ""}
     raw = uploaded_file.read() if hasattr(uploaded_file, "read") else uploaded_file.getvalue()
 
-    # --- Try pdfplumber first ---
     try:
         with pdfplumber.open(BytesIO(raw)) as pdf:
             diag["engine"] = "pdfplumber"
             diag["pages"] = len(pdf.pages)
-            text = "\n".join([p.extract_text() or "" for p in pdf.pages])
+            text = "\n".join([page.extract_text() or "" for page in pdf.pages])
             if text.strip():
                 diag["note"] = "text extracted successfully"
                 return text, diag
     except Exception as e:
         diag["note"] = f"pdfplumber failed: {e}"
 
-    # --- Try PyMuPDF fallback ---
     if fitz:
         try:
             doc = fitz.open(stream=raw, filetype="pdf")
@@ -57,49 +56,74 @@ def extract_text(uploaded_file):
     return "", diag
 
 
-# -------------------- Parser (Kotak Dummy Statement) --------------------
+# -------------------- KOTAK PARSER (DUMMY FORMAT) --------------------
 def parse_kotak_statement(text: str) -> pd.DataFrame:
     """
-    Parses Kotak-style dummy statements like:
+    Works for PDFs like:
+    Date  ValueDate  Description  Debit  Credit  Balance  Type
+    Example:
     02/09/2025 02/09/2025 SALARY CREDIT - ACME CORP 45000 95000 CREDIT
-    03/09/2025 03/09/2025 UPI PAYMENT - SWIGGY 9876543210 -350 94650 DEBIT
+    03/09/2025 03/09/2025 UPI PAYMENT - SWIGGY -350 94650 DEBIT
     """
 
     lines = [ln.strip() for ln in text.splitlines() if re.match(r"^\d{2}/\d{2}/\d{4}", ln)]
     rows = []
 
     for ln in lines:
-        m = re.match(
-            r"^(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+(.*?)\s+(-?\d+(?:\.\d+)?)\s+([\d\.]+)\s+(CREDIT|DEBIT|BALANCE)",
-            ln,
-            re.IGNORECASE,
-        )
-        if not m:
+        # Split the line safely — multiple spaces possible
+        parts = re.split(r"\s{2,}|\t+", ln.strip())
+
+        # Sometimes Kotak statements use single spaces; fallback split
+        if len(parts) < 5:
+            parts = ln.split()
+
+        if len(parts) < 6:
             continue
 
-        date, value_date, desc, amount, balance, ttype = m.groups()
-        amount = float(amount)
-        ttype = ttype.upper()
+        # Extract fields
+        date = parts[0]
+        value_date = parts[1]
 
+        # Description is everything between value_date and the last 3 columns
+        desc = " ".join(parts[2:-3]).strip()
+
+        # Last three columns are usually debit/credit, balance, type
+        tail = parts[-3:]
+        debit_or_credit, balance, ttype = tail
+
+        # Identify amount
+        amt = 0.0
+        try:
+            amt = float(debit_or_credit.replace(",", ""))
+        except:
+            # Try if amount is missing or negative sign separated
+            amt_match = re.search(r"-?\d+\.?\d*", debit_or_credit)
+            if amt_match:
+                amt = float(amt_match.group(0))
+
+        # Identify type
+        ttype = ttype.strip().upper()
         if ttype == "BALANCE":
             continue
+        txn_type = "Credit" if ttype == "CREDIT" else "Debit"
 
+        # Absolute amount for analytics
         rows.append(
             {
                 "Date": safe_date(date),
-                "Description": desc.strip(),
-                "Amount": abs(amount),
-                "Type": "Credit" if ttype == "CREDIT" else "Debit",
-                "Balance": float(balance),
+                "Description": desc,
+                "Amount": abs(amt),
+                "Type": txn_type,
+                "Balance": try_float(balance),
             }
         )
 
-    return pd.DataFrame(rows, columns=["Date", "Description", "Amount", "Type", "Balance"])
+    df = pd.DataFrame(rows, columns=["Date", "Description", "Amount", "Type", "Balance"])
+    return df
 
 
-# -------------------- Helpers --------------------
+# -------------------- HELPERS --------------------
 def safe_date(s):
-    """Convert date string safely."""
     for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(s, fmt).date()
@@ -108,14 +132,18 @@ def safe_date(s):
     return s
 
 
+def try_float(x):
+    try:
+        return float(str(x).replace(",", ""))
+    except:
+        return None
+
+
 def compute_basic_stats(df):
-    """Compute total credits/debits."""
     if df.empty:
         return {"n_txn": 0, "sum_debits": 0.0, "sum_credits": 0.0}
-
     debits = df.loc[df["Type"] == "Debit", "Amount"].sum()
     credits = df.loc[df["Type"] == "Credit", "Amount"].sum()
-
     return {
         "n_txn": int(len(df)),
         "sum_debits": float(debits),
@@ -123,25 +151,24 @@ def compute_basic_stats(df):
     }
 
 
-# -------------------- Offline Chatbot --------------------
+# -------------------- OFFLINE CHATBOT --------------------
 def mini_chatbot(msg: str) -> str:
     msg = msg.lower().strip()
     if not msg:
-        return "Ask me about budgeting, savings, investments, or reading your statement."
+        return "Ask me about budgeting, savings, or investments!"
     if "budget" in msg:
-        return "Use the 50/30/20 rule: 50% needs, 30% wants, 20% savings."
+        return "Try the 50/30/20 rule: 50% needs, 30% wants, 20% savings."
     if "save" in msg:
-        return "Set an auto-transfer to a savings account right after salary credit."
+        return "Set automatic transfers to your savings account on salary day."
     if "invest" in msg:
-        return "Start SIPs in index funds once you have an emergency fund ready."
+        return "Start small SIPs once you’ve built an emergency fund."
     if "credit" in msg:
-        return "Pay credit cards in full each month. Keep usage under 30%."
-    return "Try asking about budgeting, saving, or investment tips!"
+        return "Pay full dues monthly and keep credit usage under 30%."
+    return "I'm your offline FinGenie! Ask about budgeting, saving, or investing."
 
 
-# -------------------- Video Links --------------------
+# -------------------- FINANCE VIDEO LINKS --------------------
 def youtube_search_links(topic: str, n=8):
-    """Static finance YouTube list."""
     topic_q = "+".join(topic.split())
     base = "https://www.youtube.com/results?search_query="
     links = [
