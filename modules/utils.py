@@ -159,14 +159,28 @@ def compute_basic_stats(df):
 def mini_chatbot(msg: str) -> str:
     msg = msg.lower().strip()
     if "budget" in msg:
-        return "Use the 50/30/20 rule: 50% needs, 30% wants, 20% savings."
-    if "save" in msg:
-        return "Set automatic transfers to your savings account on salary day."
-    if "invest" in msg:
-        return "Start small SIPs once you’ve built an emergency fund."
-    if "credit" in msg:
-        return "Pay full dues monthly and keep usage under 30%."
-    return "Ask me about budgeting, saving, or investing — I’m your offline FinGenie!"
+        if "budget" in msg or "plan" in msg:
+        return "Follow the 50/30/20 rule — 50% needs, 30% wants, 20% savings. Track your spending weekly."
+    if "save" in msg or "saving" in msg:
+        return "Start small auto-savings after every income. Avoid impulse purchases and review monthly."
+    if "invest" in msg or "investment" in msg:
+        return "Begin with SIPs in index funds or ETFs. Focus on long-term compounding, not short-term profit."
+    if "credit" in msg or "card" in msg:
+        return "Use credit cards smartly: keep usage under 30%, pay full dues monthly, and never miss due dates."
+    if "loan" in msg or "emi" in msg:
+        return "Avoid high-interest personal loans. Keep EMIs under 20% of income for financial safety."
+    if "emergency" in msg:
+        return "Keep an emergency fund equal to 3-6 months of expenses in a liquid savings account."
+    if "student" in msg or "college" in msg:
+        return "For students: track expenses with apps, cook meals, and save ₹500-₹1000 monthly."
+    if "risk" in msg or "crypto" in msg:
+        return "Limit risky assets like crypto to <10% of your portfolio. Focus on mutual funds or PPF."
+    if "discipline" in msg or "habit" in msg:
+        return "Automate savings, review expenses weekly, and reward yourself for consistency."
+    if "rich" in msg or "wealth" in msg:
+        return "Wealth grows from habits: earn, save, invest, and stay patient — compounding does the rest."
+
+    return "Ask me about budgeting, saving, investing, loans, or money habits — I’m your offline FinGenie!"
 
 
 # -------------------- FINANCE VIDEOS --------------------
