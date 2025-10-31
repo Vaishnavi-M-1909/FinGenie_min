@@ -158,8 +158,8 @@ def compute_basic_stats(df):
 # -------------------- OFFLINE CHATBOT --------------------
 def mini_chatbot(msg: str) -> str:
     msg = msg.lower().strip()
-    if "budget" in msg:
-        if "budget" in msg or "plan" in msg:
+    
+    if "budget" in msg or "plan" in msg:
         return "Follow the 50/30/20 rule — 50% needs, 30% wants, 20% savings. Track your spending weekly."
     if "save" in msg or "saving" in msg:
         return "Start small auto-savings after every income. Avoid impulse purchases and review monthly."
@@ -181,6 +181,7 @@ def mini_chatbot(msg: str) -> str:
         return "Wealth grows from habits: earn, save, invest, and stay patient — compounding does the rest."
 
     return "Ask me about budgeting, saving, investing, loans, or money habits — I’m your offline FinGenie!"
+
 
 
 # -------------------- FINANCE VIDEOS --------------------
