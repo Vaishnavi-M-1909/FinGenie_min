@@ -5,14 +5,14 @@ from io import BytesIO
 from datetime import datetime
 
 try:
-    import fitz  # PyMuPDF fallback
+    import fitz  # fallback
 except Exception:
     fitz = None
 
 
 # -------------------- MAIN ENTRY --------------------
 def process_pdf_to_df(uploaded_file, return_text=False):
-    """Extract text and parse Kotak dummy statement PDF."""
+    """Extract text and parse transactions from a Kotak-style dummy statement."""
     text, meta = extract_text(uploaded_file)
 
     if not text.strip():
@@ -20,106 +20,113 @@ def process_pdf_to_df(uploaded_file, return_text=False):
         return (df, text, meta) if return_text else df
 
     df = parse_kotak_statement(text)
+    if df.empty:
+        meta["note"] = "Parsing returned 0 rows — check extracted text format."
     return (df, text, meta) if return_text else df
 
 
 # -------------------- PDF TEXT EXTRACTION --------------------
 def extract_text(uploaded_file):
-    """Extract selectable text using pdfplumber, fallback to PyMuPDF."""
+    """Extract text using pdfplumber or PyMuPDF."""
     diag = {"engine": "", "pages": 0, "note": ""}
     raw = uploaded_file.read() if hasattr(uploaded_file, "read") else uploaded_file.getvalue()
 
+    # Try pdfplumber first
     try:
         with pdfplumber.open(BytesIO(raw)) as pdf:
             diag["engine"] = "pdfplumber"
             diag["pages"] = len(pdf.pages)
-            text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+            text = "\n".join([p.extract_text() or "" for p in pdf.pages])
             if text.strip():
-                diag["note"] = "text extracted successfully"
+                diag["note"] = "Text extracted successfully via pdfplumber"
                 return text, diag
     except Exception as e:
         diag["note"] = f"pdfplumber failed: {e}"
 
+    # Try PyMuPDF fallback
     if fitz:
         try:
             doc = fitz.open(stream=raw, filetype="pdf")
             diag["engine"] = "pymupdf"
             diag["pages"] = len(doc)
-            text = "\n".join([page.get_text("text") for page in doc])
+            text = "\n".join([p.get_text("text") for p in doc])
             if text.strip():
-                diag["note"] = "text extracted via PyMuPDF"
+                diag["note"] = "Text extracted successfully via PyMuPDF"
                 return text, diag
         except Exception as e:
             diag["note"] = f"pymupdf failed: {e}"
 
-    diag["note"] = "no selectable text detected"
+    diag["note"] = "No selectable text detected."
     return "", diag
 
 
-# -------------------- KOTAK PARSER (DUMMY FORMAT) --------------------
+# -------------------- UNIVERSAL KOTAK PARSER --------------------
 def parse_kotak_statement(text: str) -> pd.DataFrame:
     """
-    Works for PDFs like:
-    Date  ValueDate  Description  Debit  Credit  Balance  Type
-    Example:
+    Parses Kotak-style statements like:
     02/09/2025 02/09/2025 SALARY CREDIT - ACME CORP 45000 95000 CREDIT
-    03/09/2025 03/09/2025 UPI PAYMENT - SWIGGY -350 94650 DEBIT
+    03/09/2025 03/09/2025 UPI PAYMENT - SWIGGY 9876543210 -350 94650 DEBIT
+    05/09/2025 05/09/2025 AMAZON ONLINE 1250.50 DR 93400.50
     """
 
-    lines = [ln.strip() for ln in text.splitlines() if re.match(r"^\d{2}/\d{2}/\d{4}", ln)]
-    rows = []
+    lines = [ln.strip() for ln in text.splitlines() if re.search(r"\d{2}/\d{2}/\d{4}", ln)]
+    data = []
 
     for ln in lines:
-        # Split the line safely — multiple spaces possible
-        parts = re.split(r"\s{2,}|\t+", ln.strip())
-
-        # Sometimes Kotak statements use single spaces; fallback split
-        if len(parts) < 5:
-            parts = ln.split()
-
-        if len(parts) < 6:
+        # Skip headers and non-transaction lines
+        if any(x in ln.lower() for x in ["date", "opening", "closing", "summary"]):
             continue
 
-        # Extract fields
-        date = parts[0]
-        value_date = parts[1]
+        # Normalize whitespace
+        ln = re.sub(r"\s+", " ", ln.strip())
 
-        # Description is everything between value_date and the last 3 columns
-        desc = " ".join(parts[2:-3]).strip()
-
-        # Last three columns are usually debit/credit, balance, type
-        tail = parts[-3:]
-        debit_or_credit, balance, ttype = tail
-
-        # Identify amount
-        amt = 0.0
-        try:
-            amt = float(debit_or_credit.replace(",", ""))
-        except:
-            # Try if amount is missing or negative sign separated
-            amt_match = re.search(r"-?\d+\.?\d*", debit_or_credit)
-            if amt_match:
-                amt = float(amt_match.group(0))
-
-        # Identify type
-        ttype = ttype.strip().upper()
-        if ttype == "BALANCE":
+        # --- Extract date(s) ---
+        dates = re.findall(r"\d{2}/\d{2}/\d{4}", ln)
+        if not dates:
             continue
-        txn_type = "Credit" if ttype == "CREDIT" else "Debit"
+        date = dates[0]
 
-        # Absolute amount for analytics
-        rows.append(
-            {
-                "Date": safe_date(date),
-                "Description": desc,
-                "Amount": abs(amt),
-                "Type": txn_type,
-                "Balance": try_float(balance),
-            }
-        )
+        # --- Extract Type (Credit/Debit/CR/DR) ---
+        ttype = "Credit" if re.search(r"\b(CR|CREDIT)\b", ln, re.I) else \
+                "Debit" if re.search(r"\b(DR|DEBIT)\b", ln, re.I) else None
+        if not ttype:
+            continue
 
-    df = pd.DataFrame(rows, columns=["Date", "Description", "Amount", "Type", "Balance"])
-    return df
+        # --- Extract all numbers ---
+        nums = re.findall(r"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?", ln)
+        nums = [float(n.replace(",", "")) for n in nums]
+
+        if len(nums) == 0:
+            continue
+
+        # Amount = last or second-last number depending on CR/DR order
+        amount = 0.0
+        balance = None
+
+        if len(nums) >= 2:
+            # Usually: [... amount balance ...]
+            amount, balance = nums[-2], nums[-1]
+        else:
+            amount = nums[-1]
+
+        # --- Description extraction ---
+        desc = re.sub(r"\d{2}/\d{2}/\d{4}", "", ln)
+        desc = re.sub(r"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?", "", desc)
+        desc = re.sub(r"\b(CREDIT|DEBIT|CR|DR)\b", "", desc, flags=re.I).strip()
+
+        # Skip empty desc
+        if not desc:
+            continue
+
+        data.append({
+            "Date": safe_date(date),
+            "Description": desc,
+            "Amount": abs(amount),
+            "Type": ttype,
+            "Balance": balance,
+        })
+
+    return pd.DataFrame(data, columns=["Date", "Description", "Amount", "Type", "Balance"])
 
 
 # -------------------- HELPERS --------------------
@@ -132,18 +139,13 @@ def safe_date(s):
     return s
 
 
-def try_float(x):
-    try:
-        return float(str(x).replace(",", ""))
-    except:
-        return None
-
-
 def compute_basic_stats(df):
     if df.empty:
         return {"n_txn": 0, "sum_debits": 0.0, "sum_credits": 0.0}
+
     debits = df.loc[df["Type"] == "Debit", "Amount"].sum()
     credits = df.loc[df["Type"] == "Credit", "Amount"].sum()
+
     return {
         "n_txn": int(len(df)),
         "sum_debits": float(debits),
@@ -151,23 +153,21 @@ def compute_basic_stats(df):
     }
 
 
-# -------------------- OFFLINE CHATBOT --------------------
+# -------------------- OFFLINE MINI CHATBOT --------------------
 def mini_chatbot(msg: str) -> str:
     msg = msg.lower().strip()
-    if not msg:
-        return "Ask me about budgeting, savings, or investments!"
     if "budget" in msg:
         return "Try the 50/30/20 rule: 50% needs, 30% wants, 20% savings."
     if "save" in msg:
-        return "Set automatic transfers to your savings account on salary day."
+        return "Set automatic transfers to savings on salary day."
     if "invest" in msg:
-        return "Start small SIPs once you’ve built an emergency fund."
+        return "Start SIPs after your emergency fund is ready."
     if "credit" in msg:
-        return "Pay full dues monthly and keep credit usage under 30%."
-    return "I'm your offline FinGenie! Ask about budgeting, saving, or investing."
+        return "Pay full dues monthly and limit card usage to 30%."
+    return "Ask about budgeting, saving, or investing — I'm your offline FinGenie!"
 
 
-# -------------------- FINANCE VIDEO LINKS --------------------
+# -------------------- YOUTUBE LINKS --------------------
 def youtube_search_links(topic: str, n=8):
     topic_q = "+".join(topic.split())
     base = "https://www.youtube.com/results?search_query="
