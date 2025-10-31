@@ -175,10 +175,5 @@ def youtube_search_links(topic: str, n=8):
     base = "https://www.youtube.com/results?search_query="
     links = [
         ("Search Results", base + topic_q),
-        ("CA Rachana Ranade", "https://www.youtube.com/@CArachana"),
-        ("Pranjal Kamra", "https://www.youtube.com/@PranjalKamra"),
-        ("Think School", "https://www.youtube.com/@ThinkSchoolOfficial"),
-        ("B Wealthy", "https://www.youtube.com/@BWealthy"),
-        ("Value Research", "https://www.youtube.com/@ValueResearchOnline"),
     ]
     return links[:n]
